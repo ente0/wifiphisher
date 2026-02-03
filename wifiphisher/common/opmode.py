@@ -304,22 +304,11 @@ class OpMode(object):
 
 
 def validate_ap_interface(interface):
-    """
-    Validate the given interface
-
-    :param interface: Name of an interface
-    :type interface: str
-    :return: the ap interface
-    :rtype: str
-    :raises: argparse.ArgumentTypeError in case of invalid interface
-    """
-
-    if not(pyric.pyw.iswireless(interface) and \
-        pyric.pyw.isinterface(interface) and \
-        interfaces.does_have_mode(interface, "AP")):
-
-        raise argparse.ArgumentTypeError("Provided interface ({})"
-                                         " either does not exist or"
-                                         " does not support AP mode" \
-                                        .format(interface))
+    try:
+        card = pyric.pyw.getcard(interface)
+        modes = pyric.pyw.devmodes(card)
+        if 'AP' not in modes:
+            raise argparse.ArgumentTypeError("Interface ({}) does not support AP mode. Modes: {}".format(interface, modes))
+    except pyric.error as e:
+        raise argparse.ArgumentTypeError("Interface ({}) error: {}".format(interface, str(e)))
     return interface
