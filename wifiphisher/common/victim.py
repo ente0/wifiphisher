@@ -1,5 +1,6 @@
 """Module to keep track the victims connected to the rogue AP."""
 
+import os
 import time
 
 import wifiphisher.common.constants as constants
@@ -68,7 +69,15 @@ class Victims():
         else:
             Victims.__instance = self
             self.victims_dic = {}
-            self.url_file = open(constants.URL_TO_OS_FILE, "r")
+            # NetHunter: handle missing URL_TO_OS_FILE
+        try:
+            url_file_path = getattr(constants, 'URL_TO_OS_FILE', None)
+            if url_file_path and os.path.isfile(url_file_path):
+                self.url_file = open(url_file_path, "r")
+            else:
+                self.url_file = None
+        except (AttributeError, IOError):
+            self.url_file = None
 
     def add_to_victim_dic(self, victim_obj):
         """Add new victim to the dictionary."""
@@ -118,6 +127,23 @@ class Victims():
         :type url: str
 
         """
+        # NetHunter: url_file might be None
+        if self.url_file is None:
+            # Fallback: guess OS from URL
+            os_hint = "Unknown"
+            if "/generate_204" in url or "/gen_204" in url:
+                os_hint = "Android"
+            elif "/hotspot-detect" in url or "/library/test/success" in url:
+                os_hint = "iOS"
+            elif "/connecttest" in url or "/ncsi" in url:
+                os_hint = "Windows"
+            elif "/canonical" in url:
+                os_hint = "Linux"
+            for key in self.victims_dic:
+                if ip_address == self.victims_dic[key].ip_address:
+                    self.victims_dic[key].os = os_hint
+            return
+        
         self.url_file.seek(0)
         for line in self.url_file:
             line = line.split("|")

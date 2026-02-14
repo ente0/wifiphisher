@@ -1,42 +1,47 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python2
 # -*- coding: utf-8 -*-
-# pylint: skip-file
-
+#pylint: skip-file
 import os
 
 dir_of_executable = os.path.dirname(__file__)
 path_to_project_root = os.path.abspath(
     os.path.join(dir_of_executable, '../../wifiphisher'))
 dir_of_data = path_to_project_root + '/data/'
-phishing_pages_dir = dir_of_data + "phishing-pages/"
 
 # Basic configuration
-DEV = 1
+DEV = 0
 DEAUTH_EXTENSION = "deauth"
 LURE10_EXTENSION = "lure10"
 WPSPBC = "wpspbc"
 KNOWN_BEACONS_EXTENSION = "knownbeacons"
 HANDSHAKE_VALIDATE_EXTENSION = "handshakeverify"
-ROGUEHOSTAPDINFO = "roguehostapdinfo"
 DEFAULT_EXTENSIONS = [DEAUTH_EXTENSION]
 EXTENSIONS_LOADPATH = "wifiphisher.extensions."
 PORT = 8080
 SSL_PORT = 443
 CHANNEL = 6
+ALL_2G_CHANNELS = range(1, 14)
 WEBSITE = "https://wifiphisher.org"
 PUBLIC_DNS = "8.8.8.8"
 PEM = dir_of_data + 'cert/server.pem'
+PHISHING_PAGES_DIR = dir_of_data + "phishing-pages/"
 SCENARIO_HTML_DIR = "html/"
 LOGOS_DIR = dir_of_data + "logos/"
 LOCS_DIR = dir_of_data + "locs/"
 MAC_PREFIX_FILE = dir_of_data + "wifiphisher-mac-prefixes"
-URL_TO_OS_FILE = dir_of_data + "wifiphisher-os-initial-requests"
 KNOWN_WLANS_FILE = dir_of_data + "wifiphisher-known-open-wlans"
 POST_VALUE_PREFIX = "wfphshr"
+phishing_pages_dir="/usr/share/wifiphisher/phishing-pages"
+
+# ---- Network config ----
+# NOTE: These are defaults and may be overridden at runtime by
+# accesspoint.py when NetHunter mode is enabled.
+# Use get_network_gw_ip() for current value in other modules.
 NETWORK_IP = "10.0.0.0"
 NETWORK_MASK = "255.255.255.0"
 NETWORK_GW_IP = "10.0.0.1"
 DHCP_LEASE = "10.0.0.2,10.0.0.100,12h"
+
 WIFI_BROADCAST = "ff:ff:ff:ff:ff:ff"
 WIFI_INVALID = "00:00:00:00:00:00"
 WIFI_IPV6MCAST1 = "33:33:00:"
@@ -55,44 +60,20 @@ INTERFERING_PROCS = [
     "dhcpcd", "udhcpc", "avahi-autoipd", "avahi-daemon", "wlassistant",
     "wifibox", "NetworkManager", "knetworkmanager"
 ]
-DNS_CONF_PATH = '/tmp/dnsmasq.conf'
 NEW_YEAR = "01-01"
 BIRTHDAY = "01-05"
 
 # Modes of operation
-# AP, Extensions
-# 2 cards, 2 interfaces
-# i) AP, ii) EM
 OP_MODE1 = 0x1
-# AP, Extensions and Internet
-# 3 cards, 3 interfaces
-# i) AP, ii) EM iii) Internet
 OP_MODE2 = 0x2
-# AP-only and Internet
-# 2 cards, 2 interfaces
-# i) AP, ii) Internet
 OP_MODE3 = 0x3
-# AP-only
-# 1 card, 1 interface
-# i) AP
 OP_MODE4 = 0x4
-# AP, Extensions w/ 1 vif
-# 1 card, 2 interfaces
-# i) AP, ii) Extensions
 OP_MODE5 = 0x5
-# AP, Extensions and Internet w/ 1 vif
-# 2 cards, 3 interfaces
-# i) AP, ii) Extensions, iii) Internet
 OP_MODE6 = 0x6
-# Advanced and WPS association 0x7
-#  3 cards, 3 interfaces
-#  i) AP, ii) Extensions, iii) Extensions (Managed)
 OP_MODE7 = 0x7
-
-# Advanced and WPS association w/ 1 vif support AP/Monitor 0x8
-# 2 cards, 3 interfaces
-# i) AP, ii) Extensions, iii) Extensions (Managed)
 OP_MODE8 = 0x8
+# NetHunter mode: AP via Android hotspot
+OP_MODE_NETHUNTER = 0x10
 
 AP_RATES = "\x0c\x12\x18\x24\x30\x48\x60\x6c"
 
@@ -108,13 +89,10 @@ GR = '\033[37m'  # gray
 T = '\033[93m'  # tan
 
 # Logging configurations
-# possible values for debug levels are:
-# CRITICAL, ERROR, WARNING, INFO, DEBUG, NOTSET
 LOG_LEVEL = 'INFO'
 LOG_FILEPATH = 'wifiphisher.log'
 LOGGING_CONFIG = {
     'version': 1,
-    # Defined the handlers
     'handlers': {
         'file': {
             'class': 'logging.handlers.RotatingFileHandler',
@@ -124,7 +102,6 @@ LOGGING_CONFIG = {
             'backupCount': 3,
         },
     },
-    # fomatters for the handlers
     'formatters': {
         'detailed': {
             'format': '%(asctime)s - %(name) 32s - %(levelname)s - %(message)s'
@@ -139,12 +116,15 @@ LOGGING_CONFIG = {
     "loggers": {},
     'disable_existing_loggers': False
 }
-CREDENTIALS_DATETIME_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+# NM DBus Marcos
+NM_APP_PATH = 'org.freedesktop.NetworkManager'
+NM_MANAGER_OBJ_PATH = '/org/freedesktop/NetworkManager'
+NM_MANAGER_INTERFACE_PATH = 'org.freedesktop.NetworkManager'
+NM_DEV_INTERFACE_PATH = 'org.freedesktop.NetworkManager.Device'
 
 # Phishinghttp
 VALID_POST_CONTENT_TYPE = "application/x-www-form-urlencoded"
-REGEX_PWD = "password|pwd|pass"
-REGEX_UNAME = "username|uname|name"
 
 # TUI
 MAIN_TUI_ATTRS = 'version essid channel ap_iface em phishinghttp args'

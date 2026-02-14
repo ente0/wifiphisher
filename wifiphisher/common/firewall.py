@@ -1,57 +1,56 @@
-"""Serves as an abstraction layer in front of iptables."""
-
-from __future__ import (absolute_import, division, print_function,
-                        unicode_literals)
-
-from wifiphisher.common.constants import NETWORK_GW_IP, PORT, SSL_PORT
-from wifiphisher.common.utilities import execute_commands
+#pylint: skip-file
+import subprocess
+import wifiphisher.common.constants as constants
 
 
 class Fw():
-    """Handles all iptables operations."""
+    def __init__(self):
+        pass
 
-    @staticmethod
-    def nat(internal_interface, external_interface):
-        # type: (str, str) -> None
-        """Do NAT."""
-        execute_commands([
-            "iptables -t nat -A POSTROUTING -o {} -j MASQUERADE".format(
-                external_interface),
-            "iptables -A FORWARD -i {} -o {} -j ACCEPT".format(
-                internal_interface, external_interface)
-        ])
+    def nat(self, internal_interface, external_interface):
+        subprocess.call(
+            ('iptables -t nat -A POSTROUTING -o %s -j MASQUERADE' %
+             (external_interface, )),
+            shell=True)
 
-    @staticmethod
-    def clear_rules():
-        # type: () -> None
-        """Clear all rules."""
-        execute_commands([
-            "iptables -F", "iptables -X", "iptables -t nat -F",
-            "iptables -t nat -X"
-        ])
+        subprocess.call(
+            ('iptables -A FORWARD -i %s -o %s -j ACCEPT' %
+             (internal_interface, external_interface)),
+            shell=True)
 
-    @staticmethod
-    def redirect_requests_localhost():
-        # type: () -> None
-        """Redirect HTTP, HTTPS & DNS requests to localhost.
+    def clear_rules(self):
+        subprocess.call('iptables -F', shell=True)
+        subprocess.call('iptables -X', shell=True)
+        subprocess.call('iptables -t nat -F', shell=True)
+        subprocess.call('iptables -t nat -X', shell=True)
 
-        Redirect the following requests to localhost:
-            * HTTP (Port 80)
-            * HTTPS (Port 443)
-            * DNS (Port 53)
+    def redirect_requests_localhost(self):
         """
-        execute_commands([
-            "iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT "
-            "--to-destination {}:{}".format(NETWORK_GW_IP, PORT),
-            "iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT "
-            "--to-destination {}:{}".format(NETWORK_GW_IP, 53),
-            "iptables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT "
-            "--to-destination {}:{}".format(NETWORK_GW_IP, 53),
-            "iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT "
-            "--to-destination {}:{}".format(NETWORK_GW_IP, SSL_PORT)
-        ])
+        Redirect HTTP/HTTPS/DNS to our phishing server.
+        CRITICAL: reads constants.NETWORK_GW_IP via module reference
+        so it picks up the dynamic value set by accesspoint.py in
+        NetHunter mode (from X import * would copy the old value).
+        """
+        gw = constants.NETWORK_GW_IP
+        port = constants.PORT
+        ssl_port = constants.SSL_PORT
+
+        subprocess.call(
+            ('iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination %s:%s'
+             % (gw, port)),
+            shell=True)
+        subprocess.call(
+            ('iptables -t nat -A PREROUTING -p udp --dport 53 -j DNAT --to-destination %s:%s'
+             % (gw, 53)),
+            shell=True)
+        subprocess.call(
+            ('iptables -t nat -A PREROUTING -p tcp --dport 53 -j DNAT --to-destination %s:%s'
+             % (gw, 53)),
+            shell=True)
+        subprocess.call(
+            ('iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination %s:%s'
+             % (gw, ssl_port)),
+            shell=True)
 
     def on_exit(self):
-        # type: () -> None
-        """Start the clean up."""
         self.clear_rules()

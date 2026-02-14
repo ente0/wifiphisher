@@ -911,27 +911,49 @@ class TuiMain(object):
         """
 
         # Get accesspoint instance and read victims from file
-        accesspoint_instance = accesspoint.AccessPoint.get_instance()
-        accesspoint_instance.read_connected_victims_file()
+        # NetHunter: instance passed via info dict, not singleton
+        if 'accesspoint' in info:
+            accesspoint_instance = info['accesspoint']
+        else:
+            # Fallback to singleton for non-NetHunter modes
+            accesspoint_instance = accesspoint.AccessPoint.get_instance()
+        
+        # NetHunter: read_connected_victims_file() might not exist (no hostapd)
+        # Check if method exists before calling
+        if hasattr(accesspoint_instance, 'read_connected_victims_file'):
+            accesspoint_instance.read_connected_victims_file()
+        # else: NetHunter mode will read DHCP leases via get_all_clients() later
 
         is_done = False
         screen.erase()
 
         _, max_window_length = screen.getmaxyx()
+        
+        # Helper function to get value from info (dict or object)
+        def get_info(key, default="N/A"):
+            if isinstance(info, dict):
+                return info.get(key, default)
+            else:
+                return getattr(info, key, default)
+        
         try:
             # print the basic info on the right top corner
             screen.addstr(0, max_window_length - 30, "|")
             screen.addstr(1, max_window_length - 30, "|")
             # continue from the "Wifiphisher"
+            version = get_info('version', '1.4-nh')  # FIX: constants.VERSION doesn't exist
             screen.addstr(1, max_window_length - 29,
-                          " Wifiphisher " + info.version, self.blue_text)
+                          " Wifiphisher " + str(version), self.blue_text)
 
+            essid = get_info('essid', 'Unknown')
             screen.addstr(2, max_window_length - 30,
-                          "|" + " ESSID: " + info.essid)
+                          "|" + " ESSID: " + str(essid))
+            channel = get_info('channel', 'N/A')
             screen.addstr(3, max_window_length - 30,
-                          "|" + " Channel: " + info.channel)
+                          "|" + " Channel: " + str(channel))
+            ap_iface = get_info('ap_iface', 'N/A')
             screen.addstr(4, max_window_length - 30,
-                          "|" + " AP interface: " + info.ap_iface)
+                          "|" + " AP interface: " + str(ap_iface))
             screen.addstr(5, max_window_length - 30,
                           "|" + " Options: [Esc] Quit")
             screen.addstr(6, max_window_length - 30, "|" + "_" * 29)
@@ -941,10 +963,11 @@ class TuiMain(object):
         except curses.error:
             pass
 
-        if info.em:
+        em = get_info('em', None)
+        if em:
             # start raw number from 2
             raw_num = 2
-            for client in info.em.get_output()[-5:]:
+            for client in em.get_output()[-5:]:
                 screen.addstr(raw_num, 0, client)
                 raw_num += 1
         try:
@@ -970,8 +993,13 @@ class TuiMain(object):
         if screen.getch() == 27:
             is_done = True
 
-        if info.phishinghttp.terminate and info.args.quitonsuccess:
-            is_done = True
+        # Check for quit on success - handle dict/object compatibility
+        phishinghttp = get_info('phishinghttp', None)
+        args = get_info('args', None)
+        if phishinghttp and args:
+            if hasattr(phishinghttp, 'terminate') and hasattr(args, 'quitonsuccess'):
+                if phishinghttp.terminate and args.quitonsuccess:
+                    is_done = True
 
         screen.refresh()
         return is_done
