@@ -748,25 +748,57 @@ class WifiphisherEngine:
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 subprocess.call(['ip', 'link', 'set', mon_iface, 'up'],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                print("[" + G + "+" + W + "] " + mon_iface + " in monitor mode")
 
-                # Initialize extension manager with deauth
+                # Set channel on monitor iface to match target
+                target_ch = channel or str(constants.CHANNEL)
+                subprocess.call(
+                    ['iw', 'dev', mon_iface, 'set', 'channel', target_ch],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print("[" + G + "+" + W + "] " + mon_iface +
+                      " in monitor mode (ch " + target_ch + ")")
+
+                # Ensure args has all attributes deauth.py expects
+                if not hasattr(args, 'deauth_essid'):
+                    args.deauth_essid = None
+                if not hasattr(args, 'deauth_channels'):
+                    args.deauth_channels = []
+                if not hasattr(args, 'channel_monitor'):
+                    args.channel_monitor = False
+
+                # NetworkManager shim — ExtensionManager needs an object
+                # with set_interface_channel(). On NetHunter we use iw directly.
+                class _NMShim(object):
+                    def set_interface_channel(self, iface, ch):
+                        subprocess.call(
+                            ['iw', 'dev', iface, 'set', 'channel', str(ch)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+                # ExtensionManager init sequence (must be in this order):
+                # 1. Create EM with NetworkManager (or shim)
+                self.em = extensions.ExtensionManager(_NMShim())
+                # 2. Set monitor interface → opens L2Socket for scapy
+                self.em.set_interface(mon_iface)
+                # 3. Register which extensions to load
+                self.em.set_extensions(['deauth'])
+                # 4. Init extensions with shared_data dict
+                #    (converted to namedtuple internally by EM)
                 shared_data = {
                     'is_freq_hop_allowed': False,
-                    'target_ap_channel': channel,
+                    'target_ap_channel': target_ch,
                     'target_ap_essid': essid,
                     'target_ap_bssid': target_ap_mac or "",
                     'rogue_ap_mac': rogue_ap_mac or "00:00:00:00:00:00",
-                    'ap_channel': channel,
+                    'ap_channel': target_ch,
                     'args': args,
                 }
-                args.noextensions = False
-                self.em = extensions.ExtensionManager(mon_iface)
                 self.em.init_extensions(shared_data)
+                # 5. Start listen + send threads
                 self.em.start_extensions()
-                print("[" + G + "+" + W + "] Extensions started (deauth active)")
+                print("[" + G + "+" + W + "] Deauth active — extensions feed updating")
             except Exception as e:
                 print("[" + R + "!" + W + "] Deauth setup failed: " + str(e))
+                import traceback
+                traceback.print_exc()
 
         self.mac_matcher.unbind()
 

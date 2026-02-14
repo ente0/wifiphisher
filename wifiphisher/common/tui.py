@@ -836,6 +836,7 @@ class TuiMain(object):
             is_done = self.display_info(screen, info)
             if is_done:
                 return
+            time.sleep(0.3)  # ~3 refreshes/sec, prevents CPU spinning
 
     def print_http_requests(self, screen, start_row_num, http_output):
         """

@@ -632,49 +632,107 @@ class AccessPoint(object):
     # ----------------------------------------------------------------
 
     def read_connected_victims_file(self):
-        lease_paths = []
-        if self._nethunter_mode:
-            lease_paths = [
-                '/data/misc/dhcp/dnsmasq.leases',
-                '/tmp/dnsmasq.leases',
-            ]
-            if self.interface:
-                lease_paths.insert(0,
-                    '/data/misc/dhcp/dnsmasq.leases.%s' % self.interface)
-        else:
-            lease_paths = ['/var/lib/misc/dnsmasq.leases']
+        """
+        Populate the Victims singleton with connected clients.
 
-        lease_file = None
-        for lf in lease_paths:
-            if os.path.isfile(lf):
-                lease_file = lf
-                break
+        NetHunter mode: uses /proc/net/arp (always available, real-time).
+          Format: IP  HWtype  Flags  HWaddress  Mask  Device
+          Flags 0x2 = complete (valid ARP entry, client is connected)
+          Filter by hotspot interface to only get our clients.
 
-        if not lease_file:
-            return
-
+        Linux mode: reads dnsmasq lease file (original behavior).
+        """
         try:
             from wifiphisher.common.victim import Victims, Victim
         except ImportError:
             return
 
         victims_instance = Victims.get_instance()
-        try:
-            with open(lease_file, 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) >= 3:
-                        mac = parts[1]
-                        ip = parts[2]
+
+        if self._nethunter_mode:
+            # ---- ARP-based detection (NetHunter) ----
+            try:
+                with open('/proc/net/arp', 'r') as f:
+                    for line in f.readlines()[1:]:  # skip header
+                        parts = line.strip().split()
+                        if len(parts) < 6:
+                            continue
+                        ip = parts[0]
+                        flags = parts[2]
+                        mac = parts[3].lower()
+                        device = parts[5]
+
+                        # Filter: only our hotspot interface
+                        if self.interface and device != self.interface:
+                            continue
+                        # Filter: only complete entries (0x2 = valid)
+                        if flags == '0x0':
+                            continue
+                        # Filter: skip incomplete (00:00:00:00:00:00)
+                        if mac == '00:00:00:00:00:00':
+                            continue
+
                         if mac not in victims_instance.victims_dic:
                             victim = Victim(mac, ip)
                             victims_instance.add_to_victim_dic(victim)
                             try:
                                 victim.associate_victim_mac_to_vendor(mac)
-                            except:
+                            except Exception:
                                 pass
-        except (IOError, OSError):
-            pass
+                        else:
+                            # Update IP if changed (DHCP renewal)
+                            existing = victims_instance.victims_dic[mac]
+                            if existing.ip_address != ip:
+                                existing.ip_address = ip
+            except (IOError, OSError):
+                pass
+
+            # Also try DHCP leases as supplement (for hostname info)
+            lease_paths = ['/data/misc/dhcp/dnsmasq.leases',
+                           '/tmp/dnsmasq.leases']
+            if self.interface:
+                lease_paths.insert(0,
+                    '/data/misc/dhcp/dnsmasq.leases.%s' % self.interface)
+            for lf in lease_paths:
+                try:
+                    if not os.path.isfile(lf):
+                        continue
+                    with open(lf, 'r') as f:
+                        for line in f:
+                            parts = line.strip().split()
+                            if len(parts) >= 3:
+                                mac = parts[1].lower()
+                                ip = parts[2]
+                                if mac not in victims_instance.victims_dic:
+                                    victim = Victim(mac, ip)
+                                    victims_instance.add_to_victim_dic(victim)
+                                    try:
+                                        victim.associate_victim_mac_to_vendor(mac)
+                                    except Exception:
+                                        pass
+                except (IOError, OSError):
+                    continue
+        else:
+            # ---- Original Linux behavior ----
+            lease_file = '/var/lib/misc/dnsmasq.leases'
+            if not os.path.isfile(lease_file):
+                return
+            try:
+                with open(lease_file, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 3:
+                            mac = parts[1]
+                            ip = parts[2]
+                            if mac not in victims_instance.victims_dic:
+                                victim = Victim(mac, ip)
+                                victims_instance.add_to_victim_dic(victim)
+                                try:
+                                    victim.associate_victim_mac_to_vendor(mac)
+                                except Exception:
+                                    pass
+            except (IOError, OSError):
+                pass
 
     # ----------------------------------------------------------------
     # Cleanup
