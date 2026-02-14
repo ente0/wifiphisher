@@ -17,6 +17,7 @@ import curses
 import socket
 import struct
 import signal
+import re
 from threading import Thread
 from subprocess import Popen, PIPE, check_output
 from shutil import copyfile
@@ -650,25 +651,38 @@ class WifiphisherEngine:
         set_route_localnet()
         print('[' + T + '*' + W + '] iptables configured')
 
-        # Get ESSID
+        # Auto-detect ESSID and channel from hotspot interface
+        # iw dev <iface> info gives both reliably:
+        #   ssid iPhone di Enteo
+        #   channel 6 (2437 MHz), width: 20 MHz, ...
+        essid = None
+        channel = None
+        try:
+            iw_output = subprocess.check_output(
+                ['iw', 'dev', ap_iface, 'info'], stderr=subprocess.PIPE
+            ).decode('utf-8', errors='replace')
+            m_ssid = re.search(r'^\s*ssid\s+(.+)$', iw_output, re.MULTILINE)
+            if m_ssid:
+                essid = m_ssid.group(1).strip()
+            m_ch = re.search(r'channel\s+(\d+)\s', iw_output)
+            if m_ch:
+                channel = m_ch.group(1)
+        except (subprocess.CalledProcessError, OSError):
+            pass
+
+        # Override with -e if specified
         if args.essid:
             essid = args.essid
-        else:
-            # Try to read SSID from hotspot interface
-            essid = "Android_Hotspot"
-            try:
-                output = subprocess.check_output(
-                    ['iwconfig', ap_iface], stderr=subprocess.PIPE
-                ).decode('utf-8', errors='replace')
-                import re
-                m = re.search(r'ESSID:"([^"]+)"', output)
-                if m:
-                    essid = m.group(1)
-            except (subprocess.CalledProcessError, OSError):
-                pass
-            print("[" + G + "+" + W + "] ESSID: " + G + essid + W)
 
-        channel = str(CHANNEL)
+        # Fallbacks
+        if not essid:
+            essid = self.access_point.get_android_ssid() or "Android_Hotspot"
+        if not channel:
+            channel = str(CHANNEL)
+
+        print("[" + G + "+" + W + "] ESSID: " + G + essid + W)
+        print("[" + G + "+" + W + "] Channel: " + G + channel + W)
+
         target_ap_mac = None
         enctype = None
 
