@@ -755,34 +755,32 @@ class AccessPoint(object):
                     pass
 
         # Remove iptables rules
-        if self._nethunter_mode and self.interface and self._dns_port:
-            iface = self.interface
-            port = self._dns_port
-            gw = constants.NETWORK_GW_IP
-
-            # Remove DNS REDIRECT rules
-            for proto in ['udp', 'tcp']:
-                subprocess.call(
-                    'iptables -t nat -D PREROUTING -i %s -p %s --dport 53 '
-                    '-j REDIRECT --to-port %d 2>/dev/null'
-                    % (iface, proto, port),
-                    shell=True)
-
-            # Remove HTTP DNAT rule
+        if self._nethunter_mode and self.interface:
+            # Flush captive portal + per-client RETURN rules
             subprocess.call(
-                'iptables -t nat -D PREROUTING -i %s -p tcp --dport 80 '
-                '-j DNAT --to-destination %s:%s 2>/dev/null'
-                % (iface, gw, constants.PORT),
+                'iptables -t nat -F PREROUTING 2>/dev/null',
                 shell=True)
 
-            # Remove HTTPS DNAT rule
+            # Remove per-client FORWARD rules
+            try:
+                from wifiphisher.common.phishinghttp import _granted_clients
+                for cip in _granted_clients:
+                    subprocess.call(
+                        'iptables -D FORWARD -s %s -j ACCEPT 2>/dev/null' % cip,
+                        shell=True)
+                    subprocess.call(
+                        'iptables -D FORWARD -d %s -m state --state RELATED,ESTABLISHED '
+                        '-j ACCEPT 2>/dev/null' % cip,
+                        shell=True)
+            except (ImportError, Exception):
+                pass
+
+            # Remove generic MASQUERADE
             subprocess.call(
-                'iptables -t nat -D PREROUTING -i %s -p tcp --dport 443 '
-                '-j DNAT --to-destination %s:%s 2>/dev/null'
-                % (iface, gw, constants.SSL_PORT),
+                'iptables -t nat -D POSTROUTING -j MASQUERADE 2>/dev/null',
                 shell=True)
 
-            print("[+] iptables rules removed")
+            print("[+] iptables rules cleaned up")
 
         if self._nethunter_mode:
             for f in ['/tmp/dhcpd.conf']:
