@@ -422,6 +422,27 @@ class CaptivePortalHandler(tornado.web.RequestHandler):
             creds.append(post_data)
             terminate = True
 
+            # Log credentials to dedicated file for TUI feed (parsed)
+            try:
+                from urllib.parse import parse_qs
+                parsed = parse_qs(post_data, keep_blank_values=True)
+                # Build readable "key: value" pairs
+                parts = []
+                for k, vals in parsed.items():
+                    # Strip common wfphshr/wfphsr prefixes for cleaner display
+                    clean_key = k
+                    for prefix in ('wfphshr', 'wfphsr', 'wfphsh'):
+                        if clean_key.startswith(prefix):
+                            clean_key = clean_key[len(prefix):]
+                            break
+                    parts.append("%s: %s" % (clean_key.capitalize(),
+                                             vals[0] if vals else ''))
+                display = " | ".join(parts) if parts else post_data
+                with open('/tmp/wifiphisher-creds.tmp', 'a') as f:
+                    f.write("%s -> %s\n" % (self.request.remote_ip, display))
+            except (IOError, OSError, Exception):
+                pass
+
             # --- POST-AUTH: grant internet and redirect ---
             client_ip = self.request.remote_ip
             grant_internet(client_ip)
@@ -498,6 +519,25 @@ class CaptivePortalHandler(tornado.web.RequestHandler):
 def runHTTPServer(ip, port, ssl_port, t, em):
     global template
     template = t
+
+    # Save template name for TUI display
+    try:
+        tpl_name = (getattr(t, 'name', None) or
+                    getattr(t, 'display_name', None))
+        if not tpl_name:
+            # Extract from template path: .../phishing-pages/facebook/html/ -> facebook
+            path = t.get_path().rstrip('/')
+            basename = os.path.basename(path)
+            # If basename is generic (html, www, static...), go up one level
+            if basename.lower() in ('html', 'www', 'static', 'public', 'templates'):
+                basename = os.path.basename(os.path.dirname(path))
+            tpl_name = basename
+        # Capitalize for display: "facebook-login" -> "Facebook Login"
+        tpl_name = tpl_name.replace('-', ' ').replace('_', ' ').title()
+        with open('/tmp/wifiphisher-template.tmp', 'w') as f:
+            f.write(tpl_name)
+    except (IOError, OSError, Exception):
+        pass
 
     # Get all the UI funcs and set them to uimethods module
     for f in em.get_ui_funcs():

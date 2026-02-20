@@ -803,7 +803,9 @@ class AccessPoint(object):
             print("[+] iptables rules cleaned up")
 
         if self._nethunter_mode:
-            for f in ['/tmp/dhcpd.conf', '/tmp/wifiphisher-grants.tmp']:
+            for f in ['/tmp/dhcpd.conf', '/tmp/wifiphisher-grants.tmp',
+                      '/tmp/wifiphisher-creds.tmp',
+                      '/tmp/wifiphisher-template.tmp']:
                 if os.path.isfile(f):
                     try:
                         os.remove(f)
@@ -830,4 +832,8 @@ class AccessPoint(object):
             os.remove('/tmp/dhcpd.conf')
         if os.path.isfile('/tmp/wifiphisher-grants.tmp'):
             os.remove('/tmp/wifiphisher-grants.tmp')
+        if os.path.isfile('/tmp/wifiphisher-creds.tmp'):
+            os.remove('/tmp/wifiphisher-creds.tmp')
+        if os.path.isfile('/tmp/wifiphisher-template.tmp'):
+            os.remove('/tmp/wifiphisher-template.tmp')
         time.sleep(2)

@@ -827,10 +827,17 @@ class TuiMain(object):
         curses.init_pair(2, curses.COLOR_YELLOW, screen.getbkgd())
         curses.init_pair(3, curses.COLOR_RED, screen.getbkgd())
         curses.init_pair(4, curses.COLOR_GREEN, screen.getbkgd())
+        # Pair 5: orange (custom RGB if supported, else yellow without bold)
+        try:
+            curses.init_color(8, 1000, 600, 0)  # RGB orange
+            curses.init_pair(5, 8, screen.getbkgd())
+        except curses.error:
+            curses.init_pair(5, curses.COLOR_YELLOW, screen.getbkgd())
         self.blue_text = curses.color_pair(1) | curses.A_BOLD
         self.yellow_text = curses.color_pair(2) | curses.A_BOLD
         self.red_text = curses.color_pair(3) | curses.A_BOLD
         self.green_text = curses.color_pair(4) | curses.A_BOLD
+        self.orange_text = curses.color_pair(5) | curses.A_BOLD
 
         while True:
             # catch the exception when screen size is smaller than
@@ -904,10 +911,6 @@ class TuiMain(object):
         """
         Print internet-granted clients on the main terminal.
         Reads from /tmp/wifiphisher-grants.tmp (written by phishinghttp).
-        :param self: A TuiMain object
-        :type self: TuiMain
-        :param start_row_num: start line to print the granted feed
-        :type start_row_num: int
         """
 
         grants_file = '/tmp/wifiphisher-grants.tmp'
@@ -928,6 +931,8 @@ class TuiMain(object):
             if not text:
                 continue
 
+            # Format: "Internet granted to 10.91.61.134 via default"
+            # Color: [+] in green, IP in green, rest normal
             try:
                 start_col = 0
                 screen.addstr(start_row_num, start_col, '[')
@@ -936,8 +941,93 @@ class TuiMain(object):
                 start_col += 1
                 screen.addstr(start_row_num, start_col, '] ')
                 start_col += 2
-                screen.addstr(start_row_num, start_col, text,
-                              self.green_text)
+
+                # Parse "Internet granted to IP via IFACE"
+                match = re.match(
+                    r'(Internet granted to\s+)(\S+)(.*)', text)
+                if match:
+                    screen.addstr(start_row_num, start_col, match.group(1))
+                    start_col += len(match.group(1))
+                    screen.addstr(start_row_num, start_col,
+                                  match.group(2), self.green_text)
+                    start_col += len(match.group(2))
+                    screen.addstr(start_row_num, start_col, match.group(3))
+                else:
+                    screen.addstr(start_row_num, start_col, text)
+
+                start_row_num += 1
+            except curses.error:
+                break
+
+    def print_captured_creds(self, screen, start_row_num):
+        """
+        Print captured credentials on the main terminal.
+        Reads from /tmp/wifiphisher-creds.tmp (written by phishinghttp).
+        """
+
+        creds_file = '/tmp/wifiphisher-creds.tmp'
+        if not os.path.isfile(creds_file):
+            return
+
+        try:
+            creds_output = check_output(
+                ['tail', '-5', creds_file])
+        except Exception:
+            return
+
+        for line in creds_output.splitlines():
+            try:
+                text = line.decode('utf-8').strip()
+            except (UnicodeDecodeError, AttributeError):
+                text = str(line).strip()
+            if not text:
+                continue
+
+            # Format: "10.91.61.157 -> Email: macos | Password: fanculo2"
+            # Color: [!] orange, IP orange, values orange, labels normal
+            try:
+                start_col = 0
+                screen.addstr(start_row_num, start_col, '[')
+                start_col += 1
+                screen.addstr(start_row_num, start_col, '!',
+                              self.orange_text)
+                start_col += 1
+                screen.addstr(start_row_num, start_col, '] ')
+                start_col += 2
+
+                # Parse "IP -> Key: val | Key: val ..."
+                match = re.match(r'(\S+)(\s*->\s*)(.*)', text)
+                if match:
+                    # IP in orange
+                    screen.addstr(start_row_num, start_col,
+                                  match.group(1), self.orange_text)
+                    start_col += len(match.group(1))
+                    # arrow normal
+                    screen.addstr(start_row_num, start_col,
+                                  match.group(2))
+                    start_col += len(match.group(2))
+                    # Parse each "Key: Value" pair
+                    fields = match.group(3)
+                    for part in re.split(r'(\|)', fields):
+                        part_stripped = part.strip()
+                        if part_stripped == '|':
+                            screen.addstr(start_row_num, start_col, ' | ')
+                            start_col += 3
+                        elif ':' in part_stripped:
+                            label, _, val = part_stripped.partition(':')
+                            screen.addstr(start_row_num, start_col,
+                                          label + ': ')
+                            start_col += len(label) + 2
+                            screen.addstr(start_row_num, start_col,
+                                          val.strip(), self.orange_text)
+                            start_col += len(val.strip())
+                        else:
+                            screen.addstr(start_row_num, start_col,
+                                          part_stripped)
+                            start_col += len(part_stripped)
+                else:
+                    screen.addstr(start_row_num, start_col, text)
+
                 start_row_num += 1
             except curses.error:
                 break
@@ -1032,9 +1122,21 @@ class TuiMain(object):
                     ['tail', '-5', '/tmp/wifiphisher-webserver.tmp'])
                 self.print_http_requests(screen, 14, http_output)
 
+            # Print the captured credentials section
+            creds_title = "Captured Credentials"
+            try:
+                with open('/tmp/wifiphisher-template.tmp', 'r') as f:
+                    tpl_name = f.read().strip()
+                if tpl_name:
+                    creds_title = "Captured Credentials for %s" % tpl_name
+            except (IOError, OSError):
+                pass
+            screen.addstr(20, 0, creds_title + ": ", self.blue_text)
+            self.print_captured_creds(screen, 21)
+
             # Print the internet granted section
-            screen.addstr(20, 0, "Internet Granted: ", self.blue_text)
-            self.print_granted_clients(screen, 21)
+            screen.addstr(27, 0, "Internet Granted: ", self.blue_text)
+            self.print_granted_clients(screen, 28)
         except curses.error:
             pass
 
