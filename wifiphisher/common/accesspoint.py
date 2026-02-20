@@ -803,7 +803,7 @@ class AccessPoint(object):
             print("[+] iptables rules cleaned up")
 
         if self._nethunter_mode:
-            for f in ['/tmp/dhcpd.conf']:
+            for f in ['/tmp/dhcpd.conf', '/tmp/wifiphisher-grants.tmp']:
                 if os.path.isfile(f):
                     try:
                         os.remove(f)
@@ -828,4 +828,6 @@ class AccessPoint(object):
             os.remove('/var/lib/misc/dnsmasq.leases')
         if os.path.isfile('/tmp/dhcpd.conf'):
             os.remove('/tmp/dhcpd.conf')
+        if os.path.isfile('/tmp/wifiphisher-grants.tmp'):
+            os.remove('/tmp/wifiphisher-grants.tmp')
         time.sleep(2)

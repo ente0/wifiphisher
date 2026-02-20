@@ -224,7 +224,7 @@ def grant_internet(client_ip):
     _granted_clients.add(client_ip)
 
     gw_ip = constants.NETWORK_GW_IP
-    print("[*] Granting internet to %s..." % client_ip)
+    logger.info("Granting internet to %s...", client_ip)
 
     # Detect interfaces for targeted rules
     inet_iface = _get_default_route_iface()
@@ -241,7 +241,6 @@ def grant_internet(client_ip):
         'iptables -t nat -I PREROUTING 2 -s %s -p tcp --dport 53 '
         '-j DNAT --to-destination 8.8.8.8:53' % client_ip,
         shell=True)
-    print("[+]   DNS DNAT -> 8.8.8.8 added")
 
     # ---------------------------------------------------------------
     # 2) RETURN — but NOT for traffic destined to the gateway itself.
@@ -265,7 +264,6 @@ def grant_internet(client_ip):
         'iptables -t nat -I PREROUTING 3 -s %s ! -d %s -j RETURN'
         % (client_ip, gw_ip),
         shell=True)
-    print("[+]   PREROUTING RETURN (excl. %s) added" % gw_ip)
 
     # ---------------------------------------------------------------
     # 3) FLUSH CONNTRACK for this client.
@@ -274,7 +272,6 @@ def grant_internet(client_ip):
         'conntrack -D -s %s 2>/dev/null' % client_ip, shell=True)
     subprocess.call(
         'conntrack -D -d %s 2>/dev/null' % client_ip, shell=True)
-    print("[+]   conntrack flushed")
 
     # ---------------------------------------------------------------
     # 4) FORWARD: allow this client's traffic to be forwarded.
@@ -286,7 +283,6 @@ def grant_internet(client_ip):
         'iptables -I FORWARD 1 -d %s -m state --state RELATED,ESTABLISHED '
         '-j ACCEPT' % client_ip,
         shell=True)
-    print("[+]   FORWARD ACCEPT added")
 
     # ---------------------------------------------------------------
     # 5) ip_forward
@@ -306,23 +302,27 @@ def grant_internet(client_ip):
             'iptables -t nat -A POSTROUTING -o %s -j MASQUERADE'
             % (inet_iface, inet_iface),
             shell=True)
-        print("[+]   MASQUERADE on %s added" % inet_iface)
     elif hotspot_iface:
         subprocess.call(
             'iptables -t nat -C POSTROUTING ! -o %s -j MASQUERADE 2>/dev/null || '
             'iptables -t nat -A POSTROUTING ! -o %s -j MASQUERADE'
             % (hotspot_iface, hotspot_iface),
             shell=True)
-        print("[+]   MASQUERADE (excl. %s) added" % hotspot_iface)
     else:
         subprocess.call(
             'iptables -t nat -C POSTROUTING -j MASQUERADE 2>/dev/null || '
             'iptables -t nat -A POSTROUTING -j MASQUERADE',
             shell=True)
-        print("[+]   MASQUERADE (generic) added")
 
-    print("[+] Internet granted to %s" % client_ip)
     logger.info("Granted internet to %s", client_ip)
+
+    # Log to dedicated grant file for TUI feed (separate from HTTP requests)
+    try:
+        with open('/tmp/wifiphisher-grants.tmp', 'a') as f:
+            f.write("Internet granted to %s via %s\n"
+                    % (client_ip, inet_iface or 'default'))
+    except (IOError, OSError):
+        pass
 
 
 class DowngradeToHTTP(tornado.web.RequestHandler):

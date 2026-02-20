@@ -826,9 +826,11 @@ class TuiMain(object):
         curses.init_pair(1, curses.COLOR_BLUE, screen.getbkgd())
         curses.init_pair(2, curses.COLOR_YELLOW, screen.getbkgd())
         curses.init_pair(3, curses.COLOR_RED, screen.getbkgd())
+        curses.init_pair(4, curses.COLOR_GREEN, screen.getbkgd())
         self.blue_text = curses.color_pair(1) | curses.A_BOLD
         self.yellow_text = curses.color_pair(2) | curses.A_BOLD
         self.red_text = curses.color_pair(3) | curses.A_BOLD
+        self.green_text = curses.color_pair(4) | curses.A_BOLD
 
         while True:
             # catch the exception when screen size is smaller than
@@ -897,6 +899,48 @@ class TuiMain(object):
             screen.addstr(start_row_num, start_col, resource, self.yellow_text)
 
             start_row_num += 1
+
+    def print_granted_clients(self, screen, start_row_num):
+        """
+        Print internet-granted clients on the main terminal.
+        Reads from /tmp/wifiphisher-grants.tmp (written by phishinghttp).
+        :param self: A TuiMain object
+        :type self: TuiMain
+        :param start_row_num: start line to print the granted feed
+        :type start_row_num: int
+        """
+
+        grants_file = '/tmp/wifiphisher-grants.tmp'
+        if not os.path.isfile(grants_file):
+            return
+
+        try:
+            grant_output = check_output(
+                ['tail', '-5', grants_file])
+        except Exception:
+            return
+
+        for line in grant_output.splitlines():
+            try:
+                text = line.decode('utf-8').strip()
+            except (UnicodeDecodeError, AttributeError):
+                text = str(line).strip()
+            if not text:
+                continue
+
+            try:
+                start_col = 0
+                screen.addstr(start_row_num, start_col, '[')
+                start_col += 1
+                screen.addstr(start_row_num, start_col, '+', self.green_text)
+                start_col += 1
+                screen.addstr(start_row_num, start_col, '] ')
+                start_col += 2
+                screen.addstr(start_row_num, start_col, text,
+                              self.green_text)
+                start_row_num += 1
+            except curses.error:
+                break
 
     def display_info(self, screen, info):
         """
@@ -987,6 +1031,10 @@ class TuiMain(object):
                 http_output = check_output(
                     ['tail', '-5', '/tmp/wifiphisher-webserver.tmp'])
                 self.print_http_requests(screen, 14, http_output)
+
+            # Print the internet granted section
+            screen.addstr(20, 0, "Internet Granted: ", self.blue_text)
+            self.print_granted_clients(screen, 21)
         except curses.error:
             pass
 
