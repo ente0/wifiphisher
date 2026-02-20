@@ -756,12 +756,12 @@ class AccessPoint(object):
 
         # Remove iptables rules
         if self._nethunter_mode and self.interface:
-            # Flush captive portal + per-client RETURN rules
+            # Flush captive portal + per-client RETURN + DNS DNAT rules
             subprocess.call(
                 'iptables -t nat -F PREROUTING 2>/dev/null',
                 shell=True)
 
-            # Remove per-client FORWARD rules
+            # Remove per-client FORWARD rules and flush conntrack
             try:
                 from wifiphisher.common.phishinghttp import _granted_clients
                 for cip in _granted_clients:
@@ -772,13 +772,33 @@ class AccessPoint(object):
                         'iptables -D FORWARD -d %s -m state --state RELATED,ESTABLISHED '
                         '-j ACCEPT 2>/dev/null' % cip,
                         shell=True)
+                    # Flush conntrack entries for this client
+                    subprocess.call(
+                        'conntrack -D -s %s 2>/dev/null' % cip,
+                        shell=True)
+                    subprocess.call(
+                        'conntrack -D -d %s 2>/dev/null' % cip,
+                        shell=True)
             except (ImportError, Exception):
                 pass
 
-            # Remove generic MASQUERADE
+            # Remove MASQUERADE rules (all variants we might have added)
             subprocess.call(
                 'iptables -t nat -D POSTROUTING -j MASQUERADE 2>/dev/null',
                 shell=True)
+            # Targeted variant (with -o interface)
+            try:
+                out = subprocess.check_output(
+                    'iptables -t nat -S POSTROUTING 2>/dev/null',
+                    shell=True).decode('utf-8', errors='replace')
+                for line in out.strip().split('\n'):
+                    if 'MASQUERADE' in line and line.startswith('-A'):
+                        del_rule = line.replace('-A ', '-D ', 1)
+                        subprocess.call(
+                            'iptables -t nat %s 2>/dev/null' % del_rule,
+                            shell=True)
+            except (subprocess.CalledProcessError, OSError):
+                pass
 
             print("[+] iptables rules cleaned up")
 
