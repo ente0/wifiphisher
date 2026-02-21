@@ -31,7 +31,7 @@ LOCS_DIR = dir_of_data + "locs/"
 MAC_PREFIX_FILE = dir_of_data + "wifiphisher-mac-prefixes"
 KNOWN_WLANS_FILE = dir_of_data + "wifiphisher-known-open-wlans"
 POST_VALUE_PREFIX = "wfphshr"
-phishing_pages_dir="/usr/share/wifiphisher/phishing-pages"
+phishing_pages_dir = PHISHING_PAGES_DIR
 
 # ---- Network config ----
 # NOTE: These are defaults and may be overridden at runtime by

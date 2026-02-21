@@ -35,6 +35,17 @@ except ImportError:
 
 import wifiphisher.common.constants as constants
 
+# ANSI color codes for terminal output
+try:
+    from wifiphisher.common.constants import G, W, R, T, C, O
+except ImportError:
+    G = '\033[32m'   # green
+    W = '\033[0m'    # reset
+    R = '\033[31m'   # red
+    T = '\033[36m'   # teal/cyan
+    C = '\033[96m'   # light cyan
+    O = '\033[33m'   # orange/yellow
+
 
 def detect_android_hotspot():
     """
@@ -144,6 +155,7 @@ class AccessPoint(object):
         self._nethunter_mode = False
         self._hotspot_iface = None
         self._hotspot_ip = None
+        self._requested_iface = None
         self._dnsmasq_proc = None
         self._dns_port = None  # Port our dnsmasq bound to
 
@@ -153,10 +165,34 @@ class AccessPoint(object):
 
     def enable_nethunter_mode(self, hotspot_iface=None, hotspot_ip=None):
         self._nethunter_mode = True
+
+        # Store what the user requested (if anything)
+        self._requested_iface = hotspot_iface
+
         if hotspot_iface and hotspot_ip:
+            # Both explicitly provided — use directly, no detection
             self._hotspot_iface = hotspot_iface
             self._hotspot_ip = hotspot_ip
+        elif hotspot_iface:
+            # Interface specified but no IP — detect IP on that interface
+            self._hotspot_iface, self._hotspot_ip = None, None
+            try:
+                output = subprocess.check_output(
+                    ['ip', '-4', 'addr', 'show', hotspot_iface],
+                    stderr=subprocess.PIPE
+                ).decode('utf-8', errors='replace')
+                inet_match = re.search(r'inet\s+([\d.]+)/', output)
+                if inet_match:
+                    self._hotspot_iface = hotspot_iface
+                    self._hotspot_ip = inet_match.group(1)
+            except (subprocess.CalledProcessError, OSError):
+                pass
+
+            # Specified interface has no IP — fall back to auto-detect
+            if not self._hotspot_iface:
+                self._hotspot_iface, self._hotspot_ip = detect_android_hotspot()
         else:
+            # No preference — full auto-detect
             self._hotspot_iface, self._hotspot_ip = detect_android_hotspot()
 
         if self._hotspot_iface:
@@ -171,6 +207,13 @@ class AccessPoint(object):
         else:
             logger.error("NetHunter mode: no hotspot detected!")
             return False
+
+    def get_iface_mismatch(self):
+        """Return (requested, detected) if there was a mismatch, else None."""
+        if (self._requested_iface and self._hotspot_iface and
+                self._requested_iface != self._hotspot_iface):
+            return (self._requested_iface, self._hotspot_iface)
+        return None
 
     # ----------------------------------------------------------------
     # SSID management
@@ -202,13 +245,13 @@ class AccessPoint(object):
     def change_android_ssid(self, new_ssid):
         if not new_ssid:
             return False
-        print("[*] Changing Android hotspot SSID to: %s" % new_ssid)
+        print("[" + T + "*" + W + "] Changing Android hotspot SSID to: " + C + new_ssid + W)
         changed = False
         ret, out, err = _run_android_cmd(
             ['cmd', 'wifi', 'set-softap-config', '--ssid', new_ssid])
         if ret == 0 and 'error' not in (out + err).lower():
             changed = True
-            print("[+] SSID changed via 'cmd wifi'")
+            print("[" + G + "+" + W + "] SSID changed via 'cmd wifi'")
         if not changed:
             for cp in ['/data/misc/apexdata/com.android.wifi/WifiConfigStoreSoftAp.xml',
                        '/data/misc/wifi/WifiConfigStoreSoftAp.xml']:
@@ -227,7 +270,7 @@ class AccessPoint(object):
                     changed = True
                     break
         if changed:
-            print("[*] Restarting hotspot to apply SSID...")
+            print("[" + T + "*" + W + "] Restarting hotspot to apply SSID...")
             self._restart_android_hotspot()
             for i in range(20):
                 time.sleep(1)
@@ -240,13 +283,14 @@ class AccessPoint(object):
                     ip_parts = ip.rsplit('.', 1)
                     constants.NETWORK_IP = ip_parts[0] + '.0'
                     constants.DHCP_LEASE = '{0}.10,{0}.250,12h'.format(ip_parts[0])
-                    print("[+] Hotspot back: %s (%s) SSID=%s" %
-                          (iface, ip, self.get_android_ssid() or "?"))
+                    print("[" + G + "+" + W + "] Hotspot back: " + C + "%s" % iface +
+                          W + " (%s) SSID=" % ip + C +
+                          "%s" % (self.get_android_ssid() or "?") + W)
                     return True
-            print("[!] Hotspot didn't come back in 20s")
+            print("[" + R + "!" + W + "] Hotspot didn't come back in 20s")
             return False
         else:
-            print("[!] Change SSID manually: Settings > Hotspot > Name")
+            print("[" + R + "!" + W + "] Change SSID manually: Settings > Hotspot > Name")
             return False
 
     def _restart_android_hotspot(self):
@@ -316,13 +360,13 @@ class AccessPoint(object):
         gw_ip = constants.NETWORK_GW_IP
 
         if self._nethunter_mode:
-            print("[*] === NetHunter captive portal setup ===")
-            print("[*] Android dnsmasq stays alive for DHCP")
+            print("[" + T + "*" + W + "] === NetHunter captive portal setup ===")
+            print("[" + T + "*" + W + "] Android dnsmasq stays alive for DHCP")
 
             # ---- STEP 1: Start our DNS-only dnsmasq on a free port ----
             free_port = _find_free_port(15353, 15499)
             self._dns_port = free_port
-            print("[+] Found free port for DNS: %d" % free_port)
+            print("[" + G + "+" + W + "] Found free port for DNS: " + C + "%d" % free_port + W)
 
             # DNS-ONLY config — NO dhcp directives at all
             config = (
@@ -346,10 +390,10 @@ class AccessPoint(object):
             with open('/tmp/dhcpd.conf', 'w') as f:
                 f.write(config)
 
-            print("[+] DNS config (/tmp/dhcpd.conf):")
+            print("[" + G + "+" + W + "] DNS config (/tmp/dhcpd.conf):")
             for line in config.strip().split('\n'):
                 if not line.startswith('#'):
-                    print("    %s" % line)
+                    print("    " + line)
 
             # Find dnsmasq binary
             dnsmasq_bin = None
@@ -366,10 +410,10 @@ class AccessPoint(object):
                 except:
                     pass
             if not dnsmasq_bin:
-                print("[!] dnsmasq not found! apt install dnsmasq")
+                print("[" + R + "!" + W + "] dnsmasq not found! apt install dnsmasq")
                 return
 
-            print("[*] Using: %s" % dnsmasq_bin)
+            print("[" + T + "*" + W + "] Using: " + C + "%s" % dnsmasq_bin + W)
 
             # Start dnsmasq
             try:
@@ -383,7 +427,7 @@ class AccessPoint(object):
                 if self._dnsmasq_proc.poll() is not None:
                     out = self._dnsmasq_proc.stdout.read().decode(
                         'utf-8', errors='replace')
-                    print("[!] dnsmasq failed on port %d:" % free_port)
+                    print("[" + R + "!" + W + "] dnsmasq failed on port %d:" % free_port)
                     for line in out.strip().split('\n')[:5]:
                         print("    " + line)
                     self._dnsmasq_proc = None
@@ -391,7 +435,7 @@ class AccessPoint(object):
                     # Retry with next port
                     free_port2 = _find_free_port(free_port + 1, 15599)
                     self._dns_port = free_port2
-                    print("[*] Retrying port %d..." % free_port2)
+                    print("[" + T + "*" + W + "] Retrying port " + C + "%d" % free_port2 + W + "...")
 
                     config2 = config.replace(
                         'port=%d' % free_port,
@@ -409,21 +453,21 @@ class AccessPoint(object):
                     if self._dnsmasq_proc.poll() is not None:
                         out = self._dnsmasq_proc.stdout.read().decode(
                             'utf-8', errors='replace')
-                        print("[!] dnsmasq also failed on port %d:" % free_port2)
+                        print("[" + R + "!" + W + "] dnsmasq also failed on port %d:" % free_port2)
                         print("    " + out[:200])
                         self._dnsmasq_proc = None
-                        print("[!] DNS hijack failed — no captive portal popup")
-                        print("[!] Clients must go to http://%s:%s manually"
+                        print("[" + R + "!" + W + "] DNS hijack failed \u2014 no captive portal popup")
+                        print("[" + R + "!" + W + "] Clients must go to http://%s:%s manually"
                               % (gw_ip, constants.PORT))
                         return
             except OSError as e:
-                print("[!] Cannot execute dnsmasq: %s" % e)
+                print("[" + R + "!" + W + "] Cannot execute dnsmasq: %s" % e)
                 return
 
             actual_port = self._dns_port
-            print("[+] dnsmasq running on port %d (PID %d)" %
-                  (actual_port, self._dnsmasq_proc.pid))
-            print("[+] DNS wildcard: ALL domains -> %s" % gw_ip)
+            print("[" + G + "+" + W + "] dnsmasq running on port " + C + "%d" % actual_port +
+                  W + " (PID " + C + "%d" % self._dnsmasq_proc.pid + W + ")")
+            print("[" + G + "+" + W + "] DNS wildcard: ALL domains \u2192 " + C + "%s" % gw_ip + W)
 
             # ---- STEP 2: Set up ALL iptables rules ----
             #
@@ -434,7 +478,7 @@ class AccessPoint(object):
             # DNS before any other rule could.
 
             iface = self.interface
-            print("[*] Setting up iptables on %s..." % iface)
+            print("[" + T + "*" + W + "] Setting up iptables on " + C + "%s" % iface + W + "...")
 
             # First: flush any leftover PREROUTING rules from previous runs
             subprocess.call(
@@ -466,7 +510,7 @@ class AccessPoint(object):
                 shell=True)
 
             # Verify
-            print("[+] iptables PREROUTING rules:")
+            print("[" + G + "+" + W + "] iptables PREROUTING rules:")
             try:
                 out = subprocess.check_output(
                     'iptables -t nat -L PREROUTING -n -v --line-numbers',
@@ -476,15 +520,15 @@ class AccessPoint(object):
             except:
                 pass
 
-            print("")
-            print("[+] === Captive portal ready! ===")
-            print("[+] Flow: client DNS :53 → REDIRECT :%d → wildcard → %s"
-                  % (actual_port, gw_ip))
-            print("[+] Flow: client HTTP :80 → DNAT → %s:%s → tornado"
-                  % (gw_ip, constants.PORT))
-            print("[+] Flow: client HTTPS :443 → DNAT → %s:%s → tornado"
-                  % (gw_ip, constants.SSL_PORT))
-            print("")
+            print()
+            print("[" + G + "+" + W + "] === Captive portal ready! ===")
+            print("[" + G + "+" + W + "] Flow: client DNS :53 \u2192 REDIRECT :" +
+                  C + "%d" % actual_port + W + " \u2192 wildcard \u2192 " + C + gw_ip + W)
+            print("[" + G + "+" + W + "] Flow: client HTTP :80 \u2192 DNAT \u2192 " +
+                  C + "%s:%s" % (gw_ip, constants.PORT) + W + " \u2192 tornado")
+            print("[" + G + "+" + W + "] Flow: client HTTPS :443 \u2192 DNAT \u2192 " +
+                  C + "%s:%s" % (gw_ip, constants.SSL_PORT) + W + " \u2192 tornado")
+            print()
 
         else:
             # ---- Original Linux behavior ----
@@ -525,8 +569,8 @@ class AccessPoint(object):
     def start(self):
         if self._nethunter_mode:
             logger.info("NetHunter mode: skipping hostapd")
-            print("[*] NetHunter mode: using Android native hotspot on %s"
-                  % self.interface)
+            print("[" + T + "*" + W + "] NetHunter mode: using Android native hotspot on " +
+                  C + self.interface + W)
 
             for sysctl_path, value in [
                 ('/proc/sys/net/ipv4/ip_forward', '1'),
@@ -548,13 +592,13 @@ class AccessPoint(object):
             if self.essid:
                 current_ssid = self.get_android_ssid()
                 if current_ssid and current_ssid != self.essid:
-                    print("[*] Current SSID: %s -> Requested: %s" %
-                          (current_ssid, self.essid))
+                    print("[" + T + "*" + W + "] Current SSID: " + C + current_ssid +
+                          W + " \u2192 Requested: " + C + self.essid + W)
                     self.change_android_ssid(self.essid)
                 elif not current_ssid:
                     self.change_android_ssid(self.essid)
                 else:
-                    print("[+] SSID already matches: %s" % self.essid)
+                    print("[" + G + "+" + W + "] SSID already matches: " + C + self.essid + W)
             return
 
         # ---- Original Linux ----
@@ -800,7 +844,7 @@ class AccessPoint(object):
             except (subprocess.CalledProcessError, OSError):
                 pass
 
-            print("[+] iptables rules cleaned up")
+            print("[" + G + "+" + W + "] iptables rules cleaned up")
 
         if self._nethunter_mode:
             for f in ['/tmp/dhcpd.conf', '/tmp/wifiphisher-grants.tmp',
@@ -837,3 +881,4 @@ class AccessPoint(object):
         if os.path.isfile('/tmp/wifiphisher-template.tmp'):
             os.remove('/tmp/wifiphisher-template.tmp')
         time.sleep(2)
+ 
